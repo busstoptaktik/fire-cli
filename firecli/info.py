@@ -8,7 +8,7 @@ from sqlalchemy.orm.exc import NoResultFound
 
 import firecli
 from firecli import firedb
-from fireapi.model import PunktInformation, PunktInformationType, Srid
+from fireapi.model import Punkt, PunktInformation, PunktInformationType, Srid
 
 
 @click.group()
@@ -18,7 +18,10 @@ def info():
     """
     pass
 
-def punkt_arbejdshest(punkt, **kwargs) -> None:
+def punkt_rapport(punkt: Punkt) -> None:
+    """
+    Rapportgenerator for funktionen 'punkt' nedenfor.
+    """
     firecli.print("")
     firecli.print("-"*80)
     firecli.print(" PUNKT", bold=True)
@@ -89,14 +92,14 @@ def punkt(ident: str, **kwargs) -> None:
             firedb.session.query(pi).filter(pit.name.startswith("IDENT:"), pi.tekst == ident).all()
         )
         for p in punktinfo:
-            punkt_arbejdshest(p.punkt)
+            punkt_rapport(p.punkt)
     except NoResultFound:
         try:
             punkt = firedb.hent_punkt(ident)
         except NoResultFound:
             firecli.print(f"Error! {ident} not found!", fg="red", err=True)
             sys.exit(1)
-        punkt_arbejdshest(punkt)
+        punkt_rapport(punkt)
 
 
 
