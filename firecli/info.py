@@ -18,36 +18,11 @@ def info():
     """
     pass
 
-
-@info.command()
-@firecli.default_options()
-@click.argument("ident")
-def punkt(ident: str, **kwargs) -> None:
-    """
-    Vis al tilgængelig information om et fikspunkt
-
-    IDENT kan være enhver form for navn et punkt er kendt som, blandt andet
-    GNSS stationsnummer, G.I.-nummer, refnr, landsnummer osv.
-
-    Søgningen er versalfølsom.
-    """
-    pi = aliased(PunktInformation)
-    pit = aliased(PunktInformationType)
-
-    try:
-        punktinfo = (
-            firedb.session.query(pi).filter(pit.name.startswith("IDENT:"), pi.tekst == ident).one()
-        )
-        punkt = punktinfo.punkt
-    except NoResultFound:
-        try:
-            punkt = firedb.hent_punkt(ident)
-        except NoResultFound:
-            firecli.print(f"Error! {ident} not found!", fg="red", err=True)
-            sys.exit(1)
-
+def punkt_arbejdshest(punkt, **kwargs) -> None:
     firecli.print("")
-    firecli.print("--- PUNKT ---", bold=True)
+    firecli.print("-"*80)
+    firecli.print(" PUNKT", bold=True)
+    firecli.print("-"*80)
     firecli.print(f"  FIRE ID             :  {punkt.id}")
     firecli.print(f"  Oprettelsesdato     :  {punkt.registreringfra}")
     firecli.print("")
@@ -78,16 +53,51 @@ def punkt(ident: str, **kwargs) -> None:
     firecli.print(f"Antal observationer til:  {n_obs_til}")
     firecli.print(f"Antal observationer fra:  {n_obs_fra}")
 
-    min_obs = punkt.observationer_til[0].registreringfra
-    max_obs = punkt.observationer_til[0].registreringfra
-    for obs in itertools.chain(punkt.observationer_til, punkt.observationer_fra):
-        if obs.registreringfra < min_obs:
-            min_obs = obs.registreringfra
-        if obs.registreringfra > max_obs:
-            max_obs = obs.registreringfra
+    if n_obs_fra + n_obs_til > 0:
+        min_obs = datetime.datetime(9999,12,31)
+        max_obs = datetime.datetime(1,1,1)
+        for obs in itertools.chain(punkt.observationer_til, punkt.observationer_fra):
+            if obs.registreringfra < min_obs:
+                min_obs = obs.registreringfra
+            if obs.registreringfra > max_obs:
+                max_obs = obs.registreringfra
 
-    firecli.print(f"Ældste observation     :  {min_obs}")
-    firecli.print(f"Nyeste observation     :  {max_obs}")
+        firecli.print(f"Ældste observation     :  {min_obs}")
+        firecli.print(f"Nyeste observation     :  {max_obs}")
+
+    firecli.print("")
+
+
+
+@info.command()
+@firecli.default_options()
+@click.argument("ident")
+def punkt(ident: str, **kwargs) -> None:
+    """
+    Vis al tilgængelig information om et fikspunkt
+
+    IDENT kan være enhver form for navn et punkt er kendt som, blandt andet
+    GNSS stationsnummer, G.I.-nummer, refnr, landsnummer osv.
+
+    Søgningen er versalfølsom.
+    """
+    pi = aliased(PunktInformation)
+    pit = aliased(PunktInformationType)
+
+    try:
+        punktinfo = (
+            firedb.session.query(pi).filter(pit.name.startswith("IDENT:"), pi.tekst == ident).all()
+        )
+        for p in punktinfo:
+            punkt_arbejdshest(p.punkt)
+    except NoResultFound:
+        try:
+            punkt = firedb.hent_punkt(ident)
+        except NoResultFound:
+            firecli.print(f"Error! {ident} not found!", fg="red", err=True)
+            sys.exit(1)
+        punkt_arbejdshest(punkt)
+
 
 
 @info.command()
