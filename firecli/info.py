@@ -18,13 +18,13 @@ def info():
     """
     pass
 
-def punkt_rapport(punkt: Punkt) -> None:
+def punkt_rapport(punkt: Punkt, ident: str, i: int, n: int) -> None:
     """
     Rapportgenerator for funktionen 'punkt' nedenfor.
     """
     firecli.print("")
     firecli.print("-"*80)
-    firecli.print(" PUNKT", bold=True)
+    firecli.print(f" PUNKT {ident} ({i}/{n})", bold=True)
     firecli.print("-"*80)
     firecli.print(f"  FIRE ID             :  {punkt.id}")
     firecli.print(f"  Oprettelsesdato     :  {punkt.registreringfra}")
@@ -43,11 +43,11 @@ def punkt_rapport(punkt: Punkt) -> None:
     firecli.print("--- KOORDINATER ---", bold=True)
     punkt.koordinater.sort(key=lambda x: x.srid.name, reverse=False)
     for koord in punkt.koordinater:
-        line = f"    {koord.t.strftime('%Y-%m-%d')}   {koord.srid.name:<15.15} {koord.x}, {koord.y}, {koord.z}"
+        line = f"{koord.t.strftime('%Y-%m-%d')}   {koord.srid.name:<15.15} {koord.x}, {koord.y}, {koord.z}"
         if koord.registreringtil is not None:
-            firecli.print(line, fg="red")
+            firecli.print("     "+line, fg="red")
         else:
-            firecli.print(line, fg="green")
+            firecli.print("   * "+line, fg="green")
     firecli.print("")
 
     firecli.print("--- OBSERVATINONER ---", bold=True)
@@ -91,15 +91,16 @@ def punkt(ident: str, **kwargs) -> None:
         punktinfo = (
             firedb.session.query(pi).filter(pit.name.startswith("IDENT:"), pi.tekst == ident).all()
         )
-        for p in punktinfo:
-            punkt_rapport(p.punkt)
+        n = len(punktinfo)
+        for i in range(n):
+            punkt_rapport(punktinfo[i].punkt, ident, i+1, n)
     except NoResultFound:
         try:
             punkt = firedb.hent_punkt(ident)
         except NoResultFound:
             firecli.print(f"Error! {ident} not found!", fg="red", err=True)
             sys.exit(1)
-        punkt_rapport(punkt)
+        punkt_rapport(punkt, ident, 1, 1)
 
 
 
