@@ -43,6 +43,7 @@ setup(
 
         [firecli.fire_commands]
         info=firecli.info:info
+        mark=firecli.mark:mark
     """,
     keywords="levelling database geodesy",
     url="https://github.com/Kortforsyningen/fire-cli",
