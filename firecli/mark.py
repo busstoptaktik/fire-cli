@@ -1,18 +1,17 @@
+from math import sqrt
+from pyproj import Proj
+from typing import Dict, List, Set, Tuple, IO
 import json
 import os
 import sys
 
-from math import sqrt
-
-import click
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.exc import NoResultFound
+import click
 
-import firecli
 from firecli import firedb
 from fireapi.model import Punkt, PunktInformation, PunktInformationType, Srid, Koordinat
-
-from typing import Dict, List, Set, Tuple, IO
+import firecli
 
 
 @click.group()
@@ -27,8 +26,12 @@ def mark():
     '-o', '--output', default='', type=click.Path(writable=True, readable=False, allow_dash=True),
     help='Sæt navn på outputfil'
 )
+@click.option(
+    '-p', '--preload', default='', type=click.Path(writable=False, readable=True, allow_dash=False),
+    help='Angiv navn på fil med foreløbige punktnavne/placeringer'
+)
 @click.argument('filnavne', nargs=-1, type=click.File('rt'))
-def gamaficer(filnavne: List[click.File('rt')], output: click.Path, **kwargs) -> None:
+def gamaficer(filnavne: List[click.File('rt')], output: click.Path, preload: click.Path, **kwargs) -> None:
     """
     Omsæt inputfil(er) til GNU Gama-format
 
@@ -39,8 +42,16 @@ def gamaficer(filnavne: List[click.File('rt')], output: click.Path, **kwargs) ->
 
     (Dette kan overstyres ved eksplicit at anføre et outputfilnavn
     med brug af option '-o NAVN')
+
+    Fuldt udjævningsworkflow:
+
+        fire mark gamaficer KDI2018vest.txt
+        gama-local KDI2018vest.xml --html resultat.html
+        start resultat.html
+        start resultat.qgz
     """
 
+    get_observations(get_observation_filenames(preload))
     # Generer et fornuftigt outputfilnavn
     if (output==''):
         fil = filnavne[0].name
@@ -48,6 +59,7 @@ def gamaficer(filnavne: List[click.File('rt')], output: click.Path, **kwargs) ->
              output = '-'
         else:
             output = os.path.splitext(filnavne[0].name)[0] + '.xml'
+    stuff_punktinfo (preload)
 
     # Læs alle inputfiler og opbyg oversigter over hhv.
     # anvendte punkter og udførte observationer
@@ -60,7 +72,8 @@ def gamaficer(filnavne: List[click.File('rt')], output: click.Path, **kwargs) ->
                     continue
                 line = line.lstrip('#').strip()
                 tokens = line.split()
-                assert len(tokens) == 9, "Malformed input line: "+line
+                assert len(tokens) in (9, 13), "Malformed input line: "+line
+                # print(tokens[0]+" "+tokens[1])
                 observationer.append(line)
                 punkter.add(tokens[0])
                 punkter.add(tokens[1])
@@ -71,22 +84,37 @@ def gamaficer(filnavne: List[click.File('rt')], output: click.Path, **kwargs) ->
         firecli.print("Fejl ved læsning af fil")
         click.Abort()
 
-    dvr90 = hent_sridid(firedb, "EPSG:5799")
-    assert dvr90 != 0, "DVR90 (EPSG:5799) ikke fundet i srid-tabel"
-    eksporter(output, observationer, punkter, dvr90)
+    print(f"OBSERVATIONER -- {len(observationer)}")
+    # print(observationer)
+    print(f"PUNKTER -- {len(punkter)}")
+    print(punkter)
+
+    eksporter(output, observationer, punkter)
 
 
-def eksporter(output: str, observationer: List[str], punkter: Set[str], koteid: int) -> None:
+def eksporter(output: str, observationer: List[str], punkter: Set[str]) -> None:
     """Skriv geojson og Gama-XML outputfiler"""
+    koteid = None
+    new_cache_records = 0
 
-    # Generer dict med (position, kote, kotevarians) og ident som nøgle
-    punktinfo = dict()
+    # Generer dict med ident som nøgle og (position, kote, kotevarians) tuple som indhold
+    punktinfo = get_cached_punktinfo()
     for ident in sorted(punkter):
-        pinfo = punkt_information(ident)
-        geo  = punkt_geometri(ident, pinfo)
-        kote = punkt_kote(pinfo, koteid)
-        (H, sH) = (0, 0) if kote is None else (kote.z, kote.sz)
-        punktinfo[ident] = (geo[0], geo[1], H, sH)
+        if ident not in punktinfo:
+            if koteid is None:
+                koteid = hent_sridid(firedb, "EPSG:5799")
+            assert koteid != 0, "DVR90 (EPSG:5799) ikke fundet i srid-tabel"
+            pinfo = punkt_information(ident)
+            if pinfo is not None:
+                new_cache_records += 1
+            geo  = punkt_geometri(ident, pinfo)
+            kote = punkt_kote(pinfo, koteid)
+            (H, sH) = (0, 0) if kote is None else (kote.z, kote.sz)
+            punktinfo[ident] = (geo[0], geo[1], H, sH)
+    if new_cache_records > 0:
+        cache_punktinfo (punktinfo)
+    else:
+        cache_punktinfo (punktinfo)
 
     # Skriv punktfil i geojson-format
     with open("punkter.geojson", "wt") as punktfil:
@@ -122,12 +150,129 @@ def eksporter(output: str, observationer: List[str], punkter: Set[str], koteid: 
             xml_obs(gamafil, obs)
         xml_postamble(gamafil)
 
+def get_observations(filnavne: str) -> List[str]:
+    observationer = list()
+    punkter = set()
+
+    try:
+        for fil in filnavne:
+            with open(fil, "rt") as obsfil:
+                for line in obsfil:
+                    if '#'!=line[0]:
+                        continue
+                    line = line.lstrip('#').strip()
+                    tokens = line.split()
+                    print(line)
+                    assert len(tokens) in (9, 13), "Malformed input line: "+line+" in file: "+fil
+                    # print(tokens[0]+" "+tokens[1])
+                    observationer.append(line)
+                    punkter.add(tokens[0])
+                    punkter.add(tokens[1])
+    except AssertionError as e:
+        firecli.print(str(e))
+        click.Abort()
+    except:
+        firecli.print("Fejl ved læsning af fil")
+        click.Abort()
+    for obs in observationer:
+        print(obs)
+    return observationer
+
+
+def get_observation_filenames(nivproj: click.Path) -> List[str]:
+    """Indlæs foreløbige registreringer i cachefil"""
+    if nivproj=='':
+        return
+    names = list()
+
+    with open(nivproj, "rt") as niv:
+        level = 0
+        for line in niv:
+            line = line.strip()
+            level = skip_until_section("OBSERVATIONSFILER", line, level)
+            if (level!=4):
+                continue
+
+            # remove leading and trailing comments
+            line = line.split('#')[0]
+            line.rstrip()
+            names += line.split()
+            print("OEPHGREASE")
+            print(names)
+    return names
+
+
+def get_cached_punktinfo() -> Dict:
+    if not os.path.isfile("cached_punktinfo.json"):
+        return {}
+    with open("cached_punktinfo.json", "rt") as cache:
+        r = json.load(cache)
+    return {} if r is None else r
+
+
+def cache_punktinfo(punktinfo: Dict):
+    with open("cached_punktinfo.json", "wt") as cache:
+        r = json.dump(punktinfo, cache, indent=4)
+
+
+def stuff_punktinfo(preload: click.Path):
+    """Indlæs foreløbige registreringer i cachefil"""
+    if preload=='':
+        return
+    pinfo = get_cached_punktinfo()
+    utm32 = Proj('+proj=utm +zone=32 +ellps=GRS80', preserve_units=False)
+
+    with open(preload, "rt") as pre:
+        level = 0
+        for line in pre:
+            line = line.strip()
+            level = skip_until_section("NYETABLEREDE PUNKTER", line, level)
+            if (level!=4):
+                continue
+
+            # remove leading and trailing comments
+            line = line.split('#')[0]
+            line.rstrip()
+
+            # parse input line
+            tokens = line.split()
+            if (len(tokens)<3):
+                continue
+            ident = tokens[0]
+            lat = float(tokens[1])
+            lon = float(tokens[2])
+            # Heuristic for determining whether coordinate is UTM or degrees
+            if (abs(lat) > 1000):
+                (lon, lat) = utm32(lon, lat, inverse=True)
+                print(f'{line} -- transformeres til: {lat}, {lon}')
+            pinfo[ident] = [lon, lat, 0, 0]
+    cache_punktinfo(pinfo)
+
+
+def skip_until_section(section: str, line: str, level: int) -> int:
+    if level==3:
+        return 4
+    if line[0:5]=="-----":
+        if level==0:
+            return 1
+        if level==1:
+            return 0
+        if level==2:
+            return 3
+        if level==4:
+            return 1
+    if level!=1:
+        return level
+    if line==section:
+        return 2
+    return level
+
 
 def obs_feature(punkter: Dict, observationer: List[str]) -> Dict:
     """Omsæt observationsinformationer til JSON-egnet dict"""
     for obs in observationer:
         dele = obs.split()
-        assert len(dele)==9, "Malformet observation: " + obs
+        assert len(dele) in (9, 13), "Malformet observation: " + obs
 
         fra = punkter[dele[0]]
         til = punkter[dele[1]]
@@ -194,11 +339,15 @@ def punkt_information(ident: str) -> PunktInformation:
     except NoResultFound:
         firecli.print(f"Error! {ident} not found!", fg="red", err=True)
         sys.exit(1)
+    firecli.print(f"Fandt {ident}", fg="green", err=False)
+    print(punktinfo)
     return punktinfo
 
 
 def punkt_kote(punktinfo: PunktInformation, koteid: int) -> Koordinat:
     """Find aktuelle koordinatværdi for koordinattypen koteid"""
+    if punktinfo is None:
+        return None
     for koord in punktinfo.punkt.koordinater:
         if (koord.sridid != koteid):
             continue
@@ -209,6 +358,8 @@ def punkt_kote(punktinfo: PunktInformation, koteid: int) -> Koordinat:
 
 def punkt_geometri(ident: str, punktinfo: PunktInformation) -> Tuple[float, float]:
     """Find placeringskoordinat for punkt"""
+    if punktinfo is None:
+        return (11, 56)
     try:
         geom = firedb.hent_geometri_objekt(punktinfo.punktid)
         # Turn the string "POINT (lon lat)" into the tuple "(lon, lat)"
